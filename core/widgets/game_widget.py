@@ -1,14 +1,14 @@
 from math import log2
 
 from PySide6.QtCore import (
-    QObject, QRectF, QRect, Slot, Signal, QPoint, Qt,
+    QRectF, QRect, Slot, Signal, QPoint, Qt,
     QEasingCurve, QVariantAnimation
 )
 from PySide6.QtGui import (
     QColor
 )
 from PySide6.QtWidgets import (
-    QWidget, QGraphicsView, QGraphicsScene,
+    QWidget, QGraphicsScene,
     QGraphicsObject, QGraphicsItem
 )
 
@@ -68,16 +68,16 @@ class AnimatedTile2D(Tile2D):
 
 
 class AddingAnimation(QVariantAnimation):
-    def __init__(self, tile: Tile2D, view: 'GameWidget') -> None:
-        super().__init__(view)
+    def __init__(self, tile: Tile2D, scene: 'GameScene') -> None:
+        super().__init__(scene)
 
         self.tile = AnimatedTile2D(tile.cell(), tile.value())
         self.tile.setZValue(-1)
         center = self.tile.mapRectToScene(self.tile.boundingRect()).center()
         self.tile.setPos(center)
 
-        self.view = view
-        self.view.scene().addItem(self.tile)
+        self.scene = scene
+        self.scene.addItem(self.tile)
 
         self.valueChanged.connect(self.tile.setScale)
         self.valueChanged.connect(
@@ -93,18 +93,18 @@ class AddingAnimation(QVariantAnimation):
         super().start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def __del__(self):
-        self.view.scene().removeItem(self.tile)
+        self.scene.removeItem(self.tile)
 
 
 class RemovingAnimation(QVariantAnimation):
-    def __init__(self, tile: Tile2D, view: 'GameWidget') -> None:
-        super().__init__(view)
+    def __init__(self, tile: Tile2D, scene: 'GameScene') -> None:
+        super().__init__(scene)
 
         self.tile = AnimatedTile2D(tile.cell(), tile.value())
         self.tile.setZValue(-1)
 
-        self.view = view
-        self.view.scene().addItem(self.tile)
+        self.scene = scene
+        self.scene.addItem(self.tile)
 
         self.valueChanged.connect(self.tile.setScale)
         self.setStartValue(1.)
@@ -116,19 +116,19 @@ class RemovingAnimation(QVariantAnimation):
         super().start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def __del__(self):
-        self.view.scene().removeItem(self.tile)
+        self.scene.removeItem(self.tile)
 
 
 class MovingAnimation(QVariantAnimation):
     def __init__(self, tile: Tile2D,
-                 old_cell: QPoint, view: 'GameWidget') -> None:
-        super().__init__(view)
+                 old_cell: QPoint, scene: 'GameScene') -> None:
+        super().__init__(scene)
 
         self.tile = AnimatedTile2D(old_cell, tile.value())
         self.tile.setZValue(0)
 
-        self.view = view
-        self.view.scene().addItem(self.tile)
+        self.scene = scene
+        self.scene.addItem(self.tile)
 
         self.valueChanged.connect(self.tile.setPos)
         self.setStartValue((old_cell * TILE_SIZE).toPointF())
@@ -140,13 +140,12 @@ class MovingAnimation(QVariantAnimation):
         super().start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def __del__(self):
-        self.view.scene().removeItem(self.tile)
+        self.scene.removeItem(self.tile)
 
 
-class GameWidget(QGraphicsView):
+class GameScene(QGraphicsScene):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setScene(QGraphicsScene(self))
 
     _controller = None
     controllerChanged = Signal(GameController)
@@ -178,7 +177,7 @@ class GameWidget(QGraphicsView):
 
     def findTiles2D(self, cell: QPoint):
         result: list[Tile2D] = []
-        for child in self.scene().items():
+        for child in self.items():
             if type(child) is Tile2D and child.cell() == cell:
                 result.append(child)
 
@@ -192,7 +191,7 @@ class GameWidget(QGraphicsView):
         print(f'add on {cellT}')
         tile2d = Tile2D(cell, value)
         tile2d.setZValue(1)
-        self.scene().addItem(tile2d)
+        self.addItem(tile2d)
 
         tile2d.setOpacity(0.)
         anim = AddingAnimation(tile2d, self)
@@ -205,7 +204,7 @@ class GameWidget(QGraphicsView):
         print(f'remove on {cellT}')
         tile2d = self.findTiles2D(cell=cell)[0]
         anim = RemovingAnimation(tile2d, self)
-        self.scene().removeItem(tile2d)
+        self.removeItem(tile2d)
         anim.start()
 
     @Slot(int, QPoint)
