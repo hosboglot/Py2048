@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QLayout
+    QMainWindow, QLayout, QGraphicsView
 )
 
-from core.widgets.game_widget import GameWidget
+from core.widgets.game_widget import GameScene
 from core.game.game_controller import GameController
 
 
@@ -17,8 +17,9 @@ class MainWindow(QMainWindow):
             parent=self
         )
 
-        self.view = GameWidget(self)
-        self.view.setController(self.game)
+        self.scene = GameScene(self)
+        self.scene.setController(self.game)
+        self.view = QGraphicsView(self.scene, self)
         self.setCentralWidget(self.view)
 
         self.game.start()
