@@ -1,7 +1,7 @@
 from math import log2
 
 from PySide6.QtCore import (
-    QRectF, QRect, Slot, Signal, QPoint, Qt,
+    QAbstractAnimation, QRectF, QRect, Slot, QPoint, Qt,
     QEasingCurve, QVariantAnimation
 )
 from PySide6.QtGui import (
@@ -11,8 +11,6 @@ from PySide6.QtWidgets import (
     QWidget, QGraphicsScene,
     QGraphicsObject, QGraphicsItem
 )
-
-from core.game.game_controller import GameController
 
 
 TILE_SIZE = 100
@@ -26,7 +24,7 @@ class Tile2D(QGraphicsObject):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
 
         self.setCell(cell)
-        self._value = value
+        self._value = int(value)
 
     _cell = None
 
@@ -42,6 +40,7 @@ class Tile2D(QGraphicsObject):
         return self._value
 
     def setValue(self, v):
+        v = int(v)
         if self._value != v:
             self._value = v
             self.update(self.boundingRect())
@@ -67,113 +66,84 @@ class AnimatedTile2D(Tile2D):
     pass
 
 
-class AddingAnimation(QVariantAnimation):
-    def __init__(self, tile: Tile2D, scene: 'GameScene') -> None:
+class AppearAnimation(QVariantAnimation):
+    def __init__(self,
+                 value: int, cell: QPoint,
+                 scene: 'GameScene') -> None:
         super().__init__(scene)
 
-        self.tile = AnimatedTile2D(tile.cell(), tile.value())
+        self.tile = AnimatedTile2D(cell, value)
         self.tile.setZValue(-1)
+        target_pos = self.tile.pos()
         center = self.tile.mapRectToScene(self.tile.boundingRect()).center()
         self.tile.setPos(center)
 
         self.scene = scene
-        self.scene.addItem(self.tile)
 
         self.valueChanged.connect(self.tile.setScale)
         self.valueChanged.connect(
             lambda v: self.tile.setPos(
-                center * (1 - v) + tile.pos() * v)
+                center * (1 - v) + target_pos * v)
         )
         self.setStartValue(0.)
         self.setEndValue(1.)
         self.setDuration(200)
-        self.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutExpo))
 
-    def start(self):
-        super().start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+    def setDirection(self, direction: QVariantAnimation.Direction) -> None:
+        if direction == QVariantAnimation.Direction.Forward:
+            self.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutExpo))
+        else:
+            self.setEasingCurve(QEasingCurve(QEasingCurve.Type.InExpo))
+        super().setDirection(direction)
 
-    def __del__(self):
-        self.scene.removeItem(self.tile)
-
-
-class RemovingAnimation(QVariantAnimation):
-    def __init__(self, tile: Tile2D, scene: 'GameScene') -> None:
-        super().__init__(scene)
-
-        self.tile = AnimatedTile2D(tile.cell(), tile.value())
-        self.tile.setZValue(-1)
-
-        self.scene = scene
-        self.scene.addItem(self.tile)
-
-        self.valueChanged.connect(self.tile.setScale)
-        self.setStartValue(1.)
-        self.setEndValue(0.)
-        self.setDuration(200)
-        self.setEasingCurve(QEasingCurve(QEasingCurve.Type.InExpo))
-
-    def start(self):
-        super().start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
-
-    def __del__(self):
-        self.scene.removeItem(self.tile)
+    def updateState(
+        self,
+        newState: QAbstractAnimation.State,
+        oldState: QAbstractAnimation.State
+    ) -> None:
+        if newState == QAbstractAnimation.State.Running:
+            self.scene.addItem(self.tile)
+        elif newState == QAbstractAnimation.State.Stopped:
+            self.scene.removeItem(self.tile)
+        return super().updateState(newState, oldState)
 
 
 class MovingAnimation(QVariantAnimation):
-    def __init__(self, tile: Tile2D,
-                 old_cell: QPoint, scene: 'GameScene') -> None:
+    def __init__(self,
+                 new_cell: QPoint, old_cell: QPoint,
+                 scene: 'GameScene') -> None:
         super().__init__(scene)
 
-        self.tile = AnimatedTile2D(old_cell, tile.value())
+        self.tile = AnimatedTile2D(old_cell, 0)
         self.tile.setZValue(0)
 
         self.scene = scene
-        self.scene.addItem(self.tile)
 
         self.valueChanged.connect(self.tile.setPos)
         self.setStartValue((old_cell * TILE_SIZE).toPointF())
-        self.setEndValue(tile.pos())
-        self.setDuration(200)
-        # self.setEasingCurve(QEasingCurve(QEasingCurve.Type.InOutExpo))
+        self.setEndValue((new_cell * TILE_SIZE).toPointF())
+        self.setDuration(100)
 
-    def start(self):
-        super().start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
-
-    def __del__(self):
-        self.scene.removeItem(self.tile)
+    def updateState(
+        self,
+        newState: QAbstractAnimation.State,
+        oldState: QAbstractAnimation.State
+    ) -> None:
+        if newState == QAbstractAnimation.State.Running:
+            self.scene.addItem(self.tile)
+        elif newState == QAbstractAnimation.State.Stopped:
+            self.scene.removeItem(self.tile)
+        return super().updateState(newState, oldState)
 
 
 class GameScene(QGraphicsScene):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
-    _controller = None
-    controllerChanged = Signal(GameController)
-
-    def setController(self, controller: GameController):
-        if self._controller == controller:
-            return
-
-        if self._controller is not None:
-            self._controller.tileAdded.disconnect(self.addTile)
-            self._controller.tileRemoved.disconnect(self.removeTile)
-            self._controller.tileValueChanged.disconnect(self.changeTileValue)
-            self._controller.tileMoved.disconnect(self.moveTile)
-
-        controller.tileAdded.connect(self.addTile)
-        controller.tileRemoved.connect(self.removeTile)
-        controller.tileValueChanged.connect(self.changeTileValue)
-        controller.tileMoved.connect(self.moveTile)
-
+    def setSize(self, row_count, column_count):
         self.setSceneRect(0, 0,
-                          TILE_SIZE * controller.row_count,
-                          TILE_SIZE * controller.column_count)
-
-        self._controller = controller
-        self.controllerChanged.emit(controller)
-
-    def controller(self):
-        return self._controller
+                          TILE_SIZE * row_count,
+                          TILE_SIZE * column_count)
 
     def findTiles2D(self, cell: QPoint):
         result: list[Tile2D] = []
@@ -186,48 +156,28 @@ class GameScene(QGraphicsScene):
         raise ValueError(f'Tile 2D for {cell.transposed()} not found on scene')
 
     @Slot(int, QPoint)
-    def addTile(self, value: int, cellT: QPoint):
-        cell = cellT.transposed()
-        print(f'add on {cellT}')
+    def addTile(self, value: int, cell: QPoint):
         tile2d = Tile2D(cell, value)
         tile2d.setZValue(1)
         self.addItem(tile2d)
-
-        tile2d.setOpacity(0.)
-        anim = AddingAnimation(tile2d, self)
-        anim.finished.connect(lambda: tile2d.setOpacity(1.))
-        anim.start()
+        return tile2d
 
     @Slot(QPoint)
-    def removeTile(self, cellT: QPoint):
-        cell = cellT.transposed()
-        print(f'remove on {cellT}')
+    def removeTile(self, cell: QPoint):
         tile2d = self.findTiles2D(cell=cell)[0]
-        anim = RemovingAnimation(tile2d, self)
         self.removeItem(tile2d)
-        anim.start()
+        return tile2d
 
-    @Slot(int, QPoint)
-    def changeTileValue(self, value: int, cellT: QPoint):
-        cell = cellT.transposed()
-        tiles = self.findTiles2D(cell=cell)
-        # print(tiles)
-        for tile2d in tiles:
-            anim = QVariantAnimation(tile2d)
-            anim.valueChanged.connect(tile2d.setValue)
-            anim.setStartValue(tile2d.value())
-            anim.setEndValue(value)
-            anim.setDuration(100)
-            anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+    # @Slot(int, QPoint)
+    # def changeTileValue(self, value: int, cell: QPoint):
+    #     tiles = self.findTiles2D(cell=cell)
+    #     for tile2d in tiles:
+    #         old = tile2d.value()
+    #         tile2d.setValue(value)
+    #     return old
 
     @Slot(QPoint, QPoint)
-    def moveTile(self, new_cellT: QPoint, old_cellT: QPoint):
-        print(f'move {old_cellT} to {new_cellT}')
-        new_cell, old_cell = new_cellT.transposed(), old_cellT.transposed()
+    def moveTile(self, new_cell: QPoint, old_cell: QPoint):
         tile2d = self.findTiles2D(cell=old_cell)[0]
         tile2d.setCell(new_cell)
-
-        tile2d.setOpacity(0.)
-        anim = MovingAnimation(tile2d, old_cell, self)
-        anim.finished.connect(lambda: tile2d.setOpacity(1.))
-        anim.start()
+        return tile2d

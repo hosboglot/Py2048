@@ -9,7 +9,7 @@ class Tile(QObject):
     def __init__(self, value=2, parent: QObject | None = None) -> None:
         super().__init__(parent)
 
-        self._value = value
+        self._value = int(value)
 
     valueChanged = Signal(int)
 
@@ -19,6 +19,7 @@ class Tile(QObject):
 
     @value.setter
     def value(self, value):
+        value = int(value)
         if self._value != value:
             self._value = value
             self.valueChanged.emit(value)
@@ -36,19 +37,27 @@ class Tile(QObject):
         return str(self.value)
 
 
-class MoveResult(Enum):
+class MoveAction(Enum):
     Empty = 1
-    Moved = 2
-    Merged = 3
-    Stayed = 4
+    'Source cell is empty'
+    Move = 2
+    'Move source to target'
+    Merge = 3
+    'Merge source cell to target'
+    Stay = 4
+    'Cannot merge source to target'
 
 
 class TileGrid(QObject):
 
+    turnStarted = Signal()
+    turnEnded = Signal()
+
     tileAdded = Signal(int, QPoint)
     tileRemoved = Signal(QPoint)
-    tileValueChanged = Signal(int, QPoint)
+    tileMerged = Signal(int, QPoint, QPoint)
     tileMoved = Signal(QPoint, QPoint)
+    tileValueChanged = Signal(int, QPoint)
 
     def __init__(self, rows=4, columns=4,
                  parent: QObject | None = None) -> None:
@@ -59,46 +68,127 @@ class TileGrid(QObject):
         self._grid: list[list[Tile | None]] = \
             [[None for _ in range(rows)] for _ in range(columns)]
 
+    def beginTurn(self):
+        self._new_grid = [row.copy() for row in self._grid]
+        self.turnStarted.emit()
+
+    def endTurn(self):
+        self._new_grid = None
+        self.turnEnded.emit()
+
     def addTile(self, row, col, value):
-        if self._grid[row][col] is not None:
-            raise IndexError(f'Cell [{row}, {col}] is not empty')
+        target: Tile | None = self._grid[row][col]
+        if target is not None:
+            self.print()
+            raise IndexError(f'[Add] Cell {row, col} is not empty')
+
         tile = Tile(value, self)
         self._grid[row][col] = tile
-        tile.valueChanged.connect(
-            lambda v: self.tileValueChanged.emit(v, tile.cell())
-        )
         self.tileAdded.emit(tile.value, tile.cell())
         return tile
 
-    def removeTile(self, tile: Tile):
-        self.tileRemoved.emit(tile.cell())
+    def mergeTile(self, old_row, old_col, row, col):
+        source: Tile | None = self._grid[old_row][old_col]
+        target: Tile | None = self._grid[row][col]
+        if source is None:
+            self.print()
+            raise ValueError(
+                f'[Merge] Source cell {old_row, old_col} is empty'
+            )
+        if target is None:
+            self.print()
+            raise ValueError(f'[Merge] Target cell {row, col} is empty')
+        if source.value != target.value:
+            self.print()
+            raise ValueError(
+                '[Merge] Source and target cell values are not equal ' +
+                f'({source.value} vs {target.value})'
+            )
 
-    def tryMoveTile(self, old_row, old_col, row, col):
-        # print(old_row, old_col, row, col)
-        target_tile: Tile = self._grid[row][col]
-        source_tile: Tile = self._grid[old_row][old_col]
-        if source_tile is None:
-            return MoveResult.Empty
-        elif target_tile is None:
-            self._moveTile(old_row, old_col, row, col)
-            return MoveResult.Moved
-        else:
-            if source_tile.value == target_tile.value:
-                source_tile.value = target_tile.value = source_tile.value * 2
-                self._moveTile(old_row, old_col, row, col)
-                self.removeTile(target_tile)
-                return MoveResult.Merged
-            else:
-                return MoveResult.Stayed
-
-    def _moveTile(self, old_row, old_col, row, col):
-        tile: Tile = self._grid[old_row][old_col]
-        self._grid[row][col] = tile
+        self._grid[row][col] = source
         self._grid[old_row][old_col] = None
-        self.tileMoved.emit(tile.cell(), QPoint(old_row, old_col))
+        source.value *= 2
+        self.tileMerged.emit(
+            source.value,
+            QPoint(row, col),
+            QPoint(old_row, old_col))
+        return source
+
+    def unmergeTile(self, old_row, old_col, row, col):
+        source: Tile | None = self._grid[old_row][old_col]
+        target: Tile | None = self._grid[row][col]
+        if source is None:
+            self.print()
+            raise ValueError(
+                f'[Unmerge] Source cell {old_row, old_col} is empty'
+            )
+        if target is not None:
+            self.print()
+            raise ValueError(f'[Unmerge] Target cell {row, col} is not empty')
+
+        self._grid[row][col] = Tile(source.value / 2, self)
+        source.value /= 2
+        # self.tileMerged.emit(
+        #     source.value,
+        #     QPoint(row, col),
+        #     QPoint(old_row, old_col))
+        return self._grid[row][col]
+
+    def moveTile(self, old_row, old_col, row, col):
+        source: Tile | None = self._grid[old_row][old_col]
+        target: Tile | None = self._grid[row][col]
+        if source is None:
+            self.print()
+            raise ValueError(f'[Move] Source cell {old_row, old_col} is empty')
+        if target is not None:
+            self.print()
+            raise ValueError(f'[Move] Target cell {row, col} is not empty')
+
+        self._grid[row][col] = source
+        self._grid[old_row][old_col] = None
+        self.tileMoved.emit(QPoint(row, col), QPoint(old_row, old_col))
+        return source
+
+    def changeTileValue(self, value, row, col):
+        target: Tile | None = self._grid[row][col]
+        if target is None:
+            self.print()
+            raise ValueError(f'[Change value] Target cell {row, col} is empty')
+
+        target.value = value
+        self.tileValueChanged.emit(value, QPoint(row, col))
+        return target
+
+    def removeTile(self, row, col):
+        target: Tile | None = self._grid[row][col]
+        if target is None:
+            self.print()
+            raise ValueError(f'[Remove] Target cell {row, col} is empty')
+
+        self._grid[row][col] = None
+        self.tileRemoved.emit(QPoint(row, col))
+        return target
+
+    def checkMove(self, old_row, old_col, row, col):
+        target: Tile | None = self._new_grid[row][col]
+        source: Tile | None = self._new_grid[old_row][old_col]
+        if source is None:
+            return MoveAction.Empty
+        elif target is None:
+            self._new_grid[row][col] = source
+            self._new_grid[old_row][old_col] = None
+            return MoveAction.Move
+        else:
+            if source.value == target.value:
+                self._new_grid[row][col] = source
+                self._new_grid[old_row][old_col] = None
+                return MoveAction.Merge
+            else:
+                return MoveAction.Stay
 
     def isCellEmpty(self, row, col):
-        return self._grid[row][col] is None
+        grid = self._new_grid if self._new_grid else self._grid
+        return grid[row][col] is None
 
     def findTile(self, tile: Tile):
         for i in range(self.row_count):
@@ -106,3 +196,12 @@ class TileGrid(QObject):
                 if self._grid[i][j] == tile:
                     return QPoint(i, j)
         raise ValueError('Tile not in grid')
+
+    def print(self):
+        grid = self._new_grid if self._new_grid else self._grid
+        print('====================')
+        print('\n'.join(
+            ['\t'.join([str(it) for it in row])
+             for row in grid]
+        ))
+        print('====================')
